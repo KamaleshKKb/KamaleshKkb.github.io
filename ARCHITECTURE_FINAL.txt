@@ -1,0 +1,589 @@
+================================================================================
+CONCURRENCY CONTROL (continued)
+================================================================================
+
+PREVENT RACE CONDITIONS:
+- Use database transactions for all critical operations
+- Implement optimistic locking (version numbers) for frequently updated records
+- Use row-level locks for inventory updates
+- Queue concurrent sales for same batch
+
+OVERSELLING PREVENTION:
+- Lock batch row during sale completion
+- Check available quantity before allocation
+- Allocate and deduct atomically
+- Create inventory movement immediately
+
+DUPLICATE PREVENTION:
+- Unique constraint on invoice_number per organization
+- Unique constraint on batch_number per organization
+- Unique constraint on purchase_number per organization
+- Unique constraint on return_number per organization
+
+NEGATIVE STOCK PREVENTION:
+- CHECK constraint: quantity_on_hand >= 0
+- Validate stock before deduction
+- Reverse movements on cancellation
+- Reconciliation catches discrepancies
+
+================================================================================
+TESTING STRATEGY
+================================================================================
+
+CRITICAL TEST AREAS:
+
+1. TENANT ISOLATION:
+   - User from Org A cannot access Org B data
+   - RLS policies enforced at database level
+   - Query filters prevent leakage
+   - Audit logs track violations
+
+2. RBAC:
+   - CASHIER cannot create medicines
+   - PHARMACIST can create medicines
+   - ACCOUNTANT cannot create sales
+   - SUPER_ADMIN can access all orgs
+   - Permission denied returns 403
+
+3. FEFO:
+   - Earliest expiry batch used first
+   - Expired batches never sold
+   - Quantity allocation correct
+   - Cost price from correct batch
+
+4. EXPIRY PREVENTION:
+   - Cannot sell expired stock
+   - Expiring soon alerts triggered
+   - Expired stock identified for write-off
+   - EXPIRY movements created
+
+5. STOCK CALCULATION:
+   - Inventory matches movements
+   - Stock never negative
+   - Reconciliation catches discrepancies
+   - Transfers don't duplicate stock
+
+6. PURCHASE TRANSACTION:
+   - Batch created on completion
+   - Inventory increased correctly
+   - Movement recorded
+   - Supplier balance updated
+   - All succeed or all fail
+
+7. SALE TRANSACTION:
+   - Stock validated before sale
+   - FEFO batches allocated
+   - Inventory decreased correctly
+   - Movements recorded
+   - Profit calculated correctly
+   - Payment recorded
+   - All succeed or all fail
+
+8. SALE RETURN:
+   - Stock restored correctly
+   - Profit reversed
+   - Movements reversed
+   - Payment reversed
+   - All succeed or all fail
+
+9. PURCHASE RETURN:
+   - Stock decreased correctly
+   - Supplier balance reduced
+   - Movements created
+   - All succeed or all fail
+
+10. STOCK TRANSFER:
+    - From branch loses stock (TRANSFER_OUT)
+    - To branch gains stock (TRANSFER_IN)
+    - No duplication
+    - Status transitions valid
+
+11. CONCURRENT SALES:
+    - Two concurrent sales don't oversell
+    - Both succeed if stock available
+    - One fails if insufficient
+    - Stock consistent
+
+12. NEGATIVE STOCK PREVENTION:
+    - Cannot reduce stock below 0
+    - Constraint enforced
+    - Error returned to user
+
+TEST TYPES:
+- Unit tests: FEFO algorithm, profit calculation, validators
+- Integration tests: Complete sales, purchases, returns
+- E2E tests: Full workflow from POS to reports
+- Load tests: Concurrent sales, high transaction volume
+- Security tests: Tenant isolation, RBAC, SQL injection
+
+================================================================================
+FUTURE SCALABILITY CONSIDERATIONS
+================================================================================
+
+WHAT TO BUILD NOW (Phase 1):
+- Multi-tenant architecture (foundation)
+- RBAC system (foundation)
+- Core POS functionality
+- Basic inventory management
+- Purchase management
+- Basic reports
+- Audit logs
+
+WHAT TO DESIGN FOR (Not implemented yet):
+
+1. BACKGROUND JOBS:
+   - Redis queue for long-running tasks
+   - Async expiry notifications
+   - Report generation
+   - Email sending
+   - SMS sending
+
+2. NOTIFICATIONS:
+   - Low stock alerts
+   - Expiring soon alerts
+   - Sale/purchase confirmations
+   - Payment reminders
+   - User invitations
+
+3. INTEGRATIONS:
+   - Payment gateways (Stripe, PayPal, Razorpay)
+   - SMS (Twilio, AWS SNS)
+   - Email (SendGrid, AWS SES)
+   - WhatsApp (Twilio)
+   - Accounting software (Tally, QuickBooks)
+   - GST compliance (India)
+
+4. ADVANCED FEATURES:
+   - Barcode printing
+   - Barcode scanning (mobile app)
+   - Customer loyalty program
+   - Prescription management
+   - Supplier portal
+   - Mobile POS app
+
+5. PERFORMANCE OPTIMIZATION:
+   - Database partitioning (by organization, date)
+   - Materialized views for reports
+   - Caching layer (Redis)
+   - Full-text search (Elasticsearch)
+   - CDN for static assets
+
+6. SCALABILITY INFRASTRUCTURE:
+   - Horizontal scaling (multiple backend instances)
+   - Load balancing
+   - Database read replicas
+   - Database connection pooling
+   - API rate limiting per organization
+   - Request queuing
+
+7. MONITORING & ANALYTICS:
+   - Application performance monitoring (APM)
+   - Error tracking (Sentry)
+   - Logging aggregation (ELK stack)
+   - Metrics collection (Prometheus)
+   - Alerts and dashboards
+
+8. COMPLIANCE & SECURITY:
+   - Data encryption at rest
+   - Data encryption in transit (TLS)
+   - Backup and disaster recovery
+   - GDPR compliance (data deletion)
+   - SOC 2 compliance
+   - Penetration testing
+
+================================================================================
+POTENTIAL ARCHITECTURAL RISKS
+================================================================================
+
+RISK 1: DATABASE PERFORMANCE AT SCALE
+Problem: Large organizations with millions of transactions
+Mitigation:
+- Implement table partitioning by organization and date
+- Create appropriate indexes
+- Use materialized views for reports
+- Implement caching layer
+- Monitor query performance
+
+RISK 2: TENANT DATA LEAKAGE
+Problem: RLS policies misconfigured or bypassed
+Mitigation:
+- Multiple isolation layers (RLS, middleware, query filtering)
+- Regular security audits
+- Penetration testing
+- Audit logs for all cross-org access
+- Automated compliance tests
+
+RISK 3: FINANCIAL DATA INTEGRITY
+Problem: Concurrent transactions causing inconsistency
+Mitigation:
+- All critical operations in atomic transactions
+- Optimistic locking for frequently updated records
+- Regular reconciliation
+- Audit logs for all changes
+- Digital signatures for important records
+
+RISK 4: OVERSELLING
+Problem: Two concurrent sales selling same stock
+Mitigation:
+- Lock batch row during sale
+- Atomic stock deduction
+- Inventory movement immediately
+- Reconciliation catches issues
+
+RISK 5: INCORRECT PROFIT CALCULATION
+Problem: COGS not calculated correctly
+Mitigation:
+- Store cost_price in sale_items
+- Preserve historical costs
+- Automated profit calculation
+- Regular audits and reconciliation
+
+RISK 6: FEFO NOT FOLLOWED
+Problem: Wrong batch sold first
+Mitigation:
+- FEFO algorithm in backend
+- Batch allocation validated
+- Audit logs for batch usage
+- Regular inventory audits
+
+RISK 7: EXPIRED STOCK SOLD
+Problem: Expired medicines in sale
+Mitigation:
+- CHECK constraint: expiry_date > CURRENT_DATE
+- FEFO algorithm filters expired
+- Expiry alerts
+- Regular inventory audits
+
+RISK 8: SCALABILITY ISSUES
+Problem: System slow with large organizations
+Mitigation:
+- Horizontal scaling architecture
+- Database optimization
+- Caching layer
+- Load testing
+- Performance monitoring
+
+RISK 9: BACKUP AND RECOVERY
+Problem: Data loss due to corruption or disaster
+Mitigation:
+- Automated daily backups
+- Backup encryption
+- Backup testing (restore drills)
+- Disaster recovery plan
+- Geographic redundancy
+
+RISK 10: COMPLIANCE VIOLATIONS
+Problem: Regulatory non-compliance
+Mitigation:
+- Audit logs for compliance
+- Data retention policies
+- GDPR/CCPA compliance
+- Regular compliance audits
+- Legal review
+
+================================================================================
+RECOMMENDED IMPLEMENTATION ORDER
+================================================================================
+
+PHASE 1: FOUNDATION (Weeks 1-4)
+Priority: Critical - Must complete before proceeding
+
+1. Database Schema Setup
+   - Create all tables
+   - Configure RLS policies
+   - Create indexes
+   - Set up constraints
+
+2. Authentication System
+   - User registration
+   - Login/logout
+   - JWT token generation
+   - Password hashing
+   - Refresh tokens
+
+3. Multi-Tenancy Foundation
+   - Organization creation
+   - Organization users
+   - Tenant middleware
+   - RLS verification
+
+4. RBAC System
+   - Roles table
+   - Permissions table
+   - Role-permission mapping
+   - User-role assignment
+   - RBAC middleware
+
+5. Basic UI Setup
+   - Login page
+   - Dashboard skeleton
+   - Navigation
+   - Layout components
+
+PHASE 2: INVENTORY CORE (Weeks 5-8)
+Priority: Critical - Foundation for POS and purchases
+
+1. Medicine Management
+   - Create/edit/delete medicines
+   - Categories and manufacturers
+   - SKU and barcode management
+   - Search functionality
+
+2. Batch Management
+   - Create batches
+   - Track expiry dates
+   - FEFO algorithm
+   - Expiry alerts
+
+3. Inventory System
+   - Inventory table
+   - Inventory movements
+   - Stock calculation
+   - Reconciliation
+
+4. Inventory UI
+   - Medicine list
+   - Batch list
+   - Inventory view
+   - Expiry alerts
+
+PHASE 3: PURCHASE MANAGEMENT (Weeks 9-12)
+Priority: High - Required for stock management
+
+1. Supplier Management
+   - Create/edit suppliers
+   - Supplier ledger
+   - Outstanding balance
+
+2. Purchase Workflow
+   - Create purchases
+   - Add items
+   - Complete purchase (atomic transaction)
+   - Cancel purchase
+
+3. Inventory Integration
+   - Batch creation on purchase
+   - Inventory increase
+   - Movement creation
+   - Supplier balance update
+
+4. Purchase UI
+   - Purchase form
+   - Purchase list
+   - Supplier list
+   - Purchase details
+
+PHASE 4: POS/SALES (Weeks 13-16)
+Priority: Critical - Core revenue functionality
+
+1. Sale Workflow
+   - Create sales
+   - Add items to cart
+   - FEFO batch allocation
+   - Complete sale (atomic transaction)
+   - Cancel sale
+
+2. Profit Calculation
+   - Revenue calculation
+   - COGS calculation
+   - Profit calculation
+   - Cost preservation
+
+3. Payment Processing
+   - Payment methods (cash, card, etc.)
+   - Record payment
+   - Outstanding balance
+
+4. POS UI
+   - Barcode scanner
+   - Medicine search
+   - Cart display
+   - Discount/tax calculator
+   - Payment methods
+   - Invoice preview
+   - Receipt printing
+
+PHASE 5: RETURNS & ADJUSTMENTS (Weeks 17-20)
+Priority: High - Important for operations
+
+1. Sale Returns
+   - Create sale returns
+   - Restore inventory
+   - Reverse profit
+   - Refund payment
+
+2. Purchase Returns
+   - Create purchase returns
+   - Decrease inventory
+   - Reduce supplier balance
+
+3. Stock Adjustments
+   - Adjustment movements
+   - Reconciliation
+   - Damage/expiry write-off
+
+4. Stock Transfers
+   - Transfer requests
+   - Approval workflow
+   - Dispatch/receive
+   - Inventory updates
+
+5. Returns UI
+   - Return forms
+   - Return list
+   - Transfer list
+
+PHASE 6: REPORTS & ANALYTICS (Weeks 21-24)
+Priority: Medium - Important for decision-making
+
+1. Sales Reports
+   - Daily/monthly sales
+   - Revenue by branch
+   - Revenue by medicine
+   - Revenue by customer
+
+2. Profit Reports
+   - Gross profit
+   - Net profit
+   - Profit by branch
+   - Profit by medicine
+
+3. Inventory Reports
+   - Current stock
+   - Stock value
+   - Expiry report
+   - Low stock report
+
+4. Ledgers
+   - Supplier ledger
+   - Customer ledger
+   - Expense ledger
+
+5. Reports UI
+   - Report generator
+   - Date range filters
+   - Branch filters
+   - Export to PDF/Excel
+   - Charts and graphs
+
+PHASE 7: AUDIT & COMPLIANCE (Weeks 25-26)
+Priority: High - Required for regulatory compliance
+
+1. Audit Logging
+   - Log all important actions
+   - Store old/new values
+   - User and timestamp
+   - IP address
+
+2. Audit UI
+   - Audit log viewer
+   - Filter by action/user/entity
+   - View changes
+
+PHASE 8: MULTI-BRANCH & ADMIN (Weeks 27-28)
+Priority: Medium - Required for multi-branch support
+
+1. Branch Management
+   - Create branches
+   - Assign employees
+   - Branch-specific reports
+
+2. User Management
+   - Create users
+   - Assign roles
+   - Grant branch access
+   - Deactivate users
+
+3. Settings
+   - Organization settings
+   - Tax configuration
+   - Expense categories
+
+4. Admin UI
+   - Branch list
+   - User list
+   - Role management
+   - Settings page
+
+PHASE 9: POLISH & OPTIMIZATION (Weeks 29-30)
+Priority: Medium - Improve UX and performance
+
+1. UX Improvements
+   - Better error messages
+   - Loading states
+   - Confirmation dialogs
+   - Keyboard shortcuts
+
+2. Performance
+   - Query optimization
+   - Caching
+   - Lazy loading
+   - Bundle optimization
+
+3. Testing
+   - Unit tests
+   - Integration tests
+   - E2E tests
+
+4. Documentation
+   - API documentation
+   - User manual
+   - Developer guide
+
+PHASE 10: DEPLOYMENT & LAUNCH (Week 31)
+Priority: Critical - Go live
+
+1. Production Setup
+   - Database migration
+   - Environment configuration
+   - SSL certificates
+   - Backup setup
+
+2. Monitoring
+   - Error tracking
+   - Performance monitoring
+   - Uptime monitoring
+
+3. Launch
+   - Beta testing
+   - Customer onboarding
+   - Support setup
+
+================================================================================
+SUMMARY: READY FOR IMPLEMENTATION
+================================================================================
+
+This architecture specification provides:
+
+✓ Complete database schema with 30+ tables
+✓ Multi-tenancy strategy with RLS
+✓ RBAC system with 7 roles
+✓ FEFO algorithm for inventory
+✓ Atomic transactions for all critical operations
+✓ Audit logging for compliance
+✓ API architecture with 50+ endpoints
+✓ Frontend architecture with pages and components
+✓ Project folder structure
+✓ Security considerations
+✓ Testing strategy
+✓ Scalability roadmap
+✓ Implementation order (30 weeks)
+
+NEXT STEPS:
+
+1. REVIEW this architecture
+2. REQUEST any clarifications or changes
+3. APPROVE before proceeding to implementation
+4. BEGIN Phase 1 (Database + Auth + RBAC)
+
+The architecture is designed for:
+- Production-ready quality
+- Regulatory compliance
+- Financial data integrity
+- Multi-tenant isolation
+- Scalability to thousands of organizations
+- Future feature additions
+
+================================================================================
+END OF STEP 1 - ARCHITECTURE SPECIFICATION
+================================================================================

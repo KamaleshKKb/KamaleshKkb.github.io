@@ -1,0 +1,895 @@
+PHARMACY POS + INVENTORY MANAGEMENT SAAS
+ARCHITECTURE SPECIFICATION - STEP 1
+
+================================================================================
+EXECUTIVE SUMMARY
+================================================================================
+
+This is a production-ready architecture for a multi-tenant Pharmacy POS + Inventory Management SaaS.
+
+CORE DESIGN PRINCIPLES:
+- True multi-tenancy with database-level isolation (PostgreSQL Row-Level Security)
+- Immutable audit trails for all financial transactions
+- FEFO (First Expiry, First Out) built into inventory logic
+- Role-based access control (RBAC) with granular permissions
+- Atomic transactions for all critical operations
+- Scalable from single-branch to multi-branch chains
+
+================================================================================
+TECHNOLOGY STACK
+================================================================================
+
+FRONTEND:
+- React 18 (complex UI, component reusability, excellent state management)
+- TypeScript (type safety for financial calculations)
+- Tailwind CSS (rapid UI development, consistent design)
+- React Router 7 (loader functions, nested routing, code splitting)
+- TanStack Query (data caching and synchronization)
+- React Hook Form + Zod (form validation)
+- shadcn/ui (professional components)
+
+BACKEND:
+- Node.js + Express (lightweight, excellent async I/O)
+- TypeScript (type safety, compile-time validation)
+- Prisma (type-safe ORM, auto-generated types)
+- JWT + bcrypt (authentication)
+- Zod (runtime schema validation)
+
+DATABASE:
+- PostgreSQL 15+ (ACID compliance, RLS, JSON, window functions, full-text search)
+- Row-Level Security (database-level tenant isolation)
+- Materialized Views (pre-computed reports)
+
+DEPLOYMENT:
+- Docker/Kubernetes (backend)
+- PostgreSQL managed service (database)
+- Static hosting (frontend)
+- S3/MinIO (object storage)
+- Redis (job processing - future)
+
+================================================================================
+SYSTEM ARCHITECTURE DIAGRAM
+================================================================================
+
+CLIENT LAYER (React)
+├── POS Interface (Barcode, FEFO, Payments)
+├── Inventory Manager (Stock, Batch Tracking, Expiry Alerts)
+└── Admin Dashboard (Reports, Analytics, User Management)
+        │
+        ├─── HTTPS/REST API ───┐
+        │                       │
+API GATEWAY & MIDDLEWARE
+├── Rate Limiting
+├── CORS Validation
+├── Request Logging
+└── Error Handling
+        │
+    ┌───┴───────────────────────┐
+    │                           │
+CORE SERVICES
+├── Auth Service (JWT, Refresh, Permissions)
+├── Core Service (POS, Inventory, Purchases)
+└── Report Service (Profit/Loss, Stock, Ledgers)
+    │
+MIDDLEWARE LAYER
+├── Tenant Isolation (organization_id)
+├── RBAC Enforcement
+├── Audit Logging
+├── Input Validation (Zod)
+└── Transaction Management
+    │
+POSTGRESQL DATABASE
+├── Organizations & Branches
+├── Users & RBAC
+├── Medicines & Batches
+├── Inventory & Movements
+├── Sales & Purchases
+├── Audit Logs
+└── Row-Level Security (RLS)
+
+================================================================================
+MULTI-TENANCY ARCHITECTURE
+================================================================================
+
+STRATEGY: Shared Database + Row-Level Security (RLS)
+
+WHY THIS APPROACH:
+- Simpler operational management than database-per-tenant
+- Cost efficient for small to medium organizations
+- Database-level isolation prevents accidental data leakage
+- Easier to implement organization-wide reports
+
+IMPLEMENTATION:
+1. Every table includes organization_id foreign key
+2. PostgreSQL RLS policies enforce isolation at database level
+3. Backend middleware sets tenant context (SET app.current_organization_id)
+4. Query filtering adds secondary layer (WHERE organization_id = $1)
+
+SECURITY LAYERS:
+- Database: RLS Policy (prevents SQL injection)
+- Application: Middleware (enforces org_id)
+- Application: Query Filters (prevents accidental leakage)
+- API: Authentication (prevents unauthorized access)
+
+================================================================================
+MULTI-BRANCH ARCHITECTURE
+================================================================================
+
+BRANCH HIERARCHY:
+Organization
+├── Branch 1 (Delhi)
+│   ├── Inventory (independent stock)
+│   ├── Sales (POS transactions)
+│   ├── Purchases (supplier orders)
+│   ├── Employees (staff)
+│   └── Expenses (operating costs)
+├── Branch 2 (Mumbai)
+│   └── ... (same as Branch 1)
+└── Head Office (organization-wide reports)
+
+BRANCH-SPECIFIC DATA:
+- Inventory (each branch has own stock)
+- Sales (POS transactions)
+- Purchases (supplier orders)
+- Employees (staff at branch)
+- Expenses (operating costs)
+- Stock transfers (in/out)
+
+ORGANIZATION-WIDE DATA:
+- Master medicines catalog
+- Supplier list
+- Customer list (optional: branch-specific)
+- Subscription & billing
+- Settings
+
+BRANCH-SPECIFIC vs ORGANIZATION-WIDE REPORTS:
+- Branch Report: Sales by branch (filtered by branch_id)
+- Organization Report: Aggregate sales across all branches
+
+================================================================================
+USER & RBAC ARCHITECTURE
+================================================================================
+
+ROLE HIERARCHY:
+SUPER_ADMIN (System-wide)
+  └─ Full access to all organizations
+
+OWNER (Organization-wide)
+  └─ Full access to organization, all branches
+
+BRANCH_MANAGER (Branch-specific)
+  └─ Full access to assigned branch(es)
+
+PHARMACIST (Branch-specific)
+  └─ Medicine management, inventory, approve returns
+
+CASHIER (Branch-specific)
+  └─ POS only (create sales, receive payments)
+
+INVENTORY_MANAGER (Branch-specific)
+  └─ Inventory management, stock transfers, purchases
+
+ACCOUNTANT (Organization-wide)
+  └─ Financial reports, payments, no transaction modification
+
+RBAC TABLES:
+- users: Global user records
+- organization_users: User membership in organizations
+- roles: System roles (global) + custom roles (per org)
+- permissions: Global permission list
+- role_permissions: Role -> Permission mapping
+- user_roles: User -> Role assignment (scoped to organization)
+- user_branch_access: User -> Branch access
+
+RBAC ENFORCEMENT:
+- Backend middleware checks permissions before executing actions
+- Never trust frontend permissions
+- All API endpoints require permission check
+
+================================================================================
+BATCH & EXPIRY & FEFO ARCHITECTURE
+================================================================================
+
+CORE PRINCIPLE: Separate Medicine from Batch
+
+MEDICINE: Product (Paracetamol 500mg)
+BATCH: Specific production batch of that medicine
+
+Example:
+Medicine: Paracetamol 500mg
+├── Batch A (ABC123, Expiry: 2027-01-01, Qty: 500)
+├── Batch B (XYZ456, Expiry: 2028-05-01, Qty: 800)
+└── Batch C (DEF789, Expiry: 2026-12-15, Qty: 300)
+
+FEFO ALGORITHM (First Expiry, First Out):
+When selling a medicine:
+1. Find all non-expired batches of that medicine in the branch
+2. Sort by expiry date (earliest first)
+3. Use earliest-expiring batch first
+4. If insufficient quantity, continue to next batch
+5. Never sell expired stock
+
+Example:
+- Need 600 units
+- Batch C: 300 units (Expiry: 2026-12-15) - USE FIRST
+- Batch A: 300 units (Expiry: 2027-01-01) - USE SECOND
+- Total allocated: 600 units (from 2 batches)
+
+EXPIRY TRACKING:
+- Get expiring soon (30 days): Alert pharmacist
+- Get expired stock: Write-off and create EXPIRY movement
+
+================================================================================
+INVENTORY ARCHITECTURE
+================================================================================
+
+CORE PRINCIPLE: Immutable Audit Trail
+
+Every stock change creates an inventory_movement record.
+Stock is never silently modified.
+
+STOCK CALCULATION STRATEGY: Hybrid Approach
+
+STORED BALANCE (inventory.quantity_on_hand):
+- Fast queries for current stock
+- Updated with each movement
+
+AUDIT TRAIL (inventory_movements):
+- Verify balance and detect discrepancies
+- Immutable record of all changes
+
+RECONCILIATION:
+- Periodic stock counts ensure accuracy
+- Detect and log discrepancies
+
+MOVEMENT TYPES:
+- OPENING_STOCK: Initial stock entry
+- PURCHASE: Purchase completion
+- SALE: Sale completion
+- SALE_RETURN: Customer return
+- PURCHASE_RETURN: Return to supplier
+- TRANSFER_IN: Receive from another branch
+- TRANSFER_OUT: Send to another branch
+- ADJUSTMENT: Stock count adjustment
+- DAMAGE: Damaged stock
+- EXPIRY: Expired stock write-off
+
+INVENTORY QUERIES:
+1. Get available stock for sale (FEFO):
+   - Find non-expired batches
+   - Sort by expiry date
+   - Check quantity_available (on_hand - reserved)
+
+2. Get stock by branch:
+   - Total quantity per medicine per branch
+   - Nearest expiry date
+
+3. Get low stock alerts:
+   - Current stock < reorder_level
+   - Trigger purchase request
+
+4. Get expiring soon:
+   - Expiry date between today and 30 days
+   - Alert for FEFO priority
+
+================================================================================
+PURCHASE ARCHITECTURE
+================================================================================
+
+PURCHASE WORKFLOW:
+1. DRAFT: Create purchase record, add items
+2. COMPLETED: Create batches, increase inventory, update supplier balance
+3. CANCELLED: Mark as cancelled, no stock changes
+
+PURCHASE TRANSACTION (Atomic):
+1. Get purchase record
+2. Validate status is DRAFT
+3. For each purchase item:
+   a. Create or update batch
+   b. Create or update inventory
+   c. Create inventory movement
+4. Update purchase status to COMPLETED
+5. Update supplier balance
+6. Record payment (optional)
+
+CRITICAL CONSTRAINTS:
+- Purchase number must be unique per organization
+- Batch number must be unique per organization
+- All operations must be atomic (all succeed or all fail)
+- Supplier balance must be updated
+- Inventory movements must be immutable
+
+================================================================================
+POS/SALES ARCHITECTURE
+================================================================================
+
+SALE WORKFLOW:
+1. DRAFT: Build cart, add items, apply discounts
+2. COMPLETED: Validate stock (FEFO), create sale, decrease inventory, record payment
+3. CANCELLED: Restore stock, create reverse movements
+4. RETURNED: Create sale_return, restore stock, adjust profit
+
+SALE TRANSACTION (Atomic):
+1. Get sale record and items
+2. For each item:
+   a. Get FEFO batches (sorted by expiry)
+   b. Validate stock availability
+   c. Allocate quantity to batches
+3. Create sale record with calculated profit
+4. Create sale items (one per batch used)
+5. Decrease inventory (create SALE movements)
+6. Record payment
+7. Create audit log entry
+
+PROFIT CALCULATION:
+Profit = Revenue - Cost of Goods Sold
+Revenue = (Quantity * Unit Price) - Discount + Tax
+COGS = Sum of (Quantity * Batch Purchase Price) for each batch used
+
+COST PRESERVATION:
+- Store cost_price in sale_items (from batch.purchase_price)
+- Preserve historical cost even if batch price changes
+- Enables accurate profit calculation
+
+================================================================================
+RETURN ARCHITECTURE
+================================================================================
+
+SALE RETURN:
+1. Customer returns medicine
+2. Create sale_return record
+3. Restore stock (create SALE_RETURN movement)
+4. Reverse profit calculation
+5. Refund payment
+
+PURCHASE RETURN:
+1. Return medicine to supplier
+2. Create purchase_return record
+3. Decrease inventory (create PURCHASE_RETURN movement)
+4. Reduce supplier balance
+5. Record payment (credit)
+
+RETURNS AFFECT:
+- Inventory (restored)
+- Batch quantity (increased)
+- Revenue (reversed)
+- Cost (reversed)
+- Profit (reversed)
+- Supplier/Customer balance (reversed)
+
+================================================================================
+STOCK TRANSFER ARCHITECTURE
+================================================================================
+
+STOCK TRANSFER WORKFLOW:
+1. REQUESTED: Branch A requests transfer to Branch B
+2. APPROVED: Branch Manager approves
+3. DISPATCHED: Branch A sends stock
+4. RECEIVED: Branch B receives stock
+5. CANCELLED: Transfer cancelled
+
+STOCK TRANSFER TRANSACTION (Atomic):
+1. Validate stock in from_branch
+2. Create TRANSFER_OUT movement in from_branch
+3. Create TRANSFER_IN movement in to_branch
+4. Update inventory in both branches
+5. Update transfer status
+
+CRITICAL CONSTRAINT:
+- Stock must not be duplicated during transfer
+- From branch loses stock immediately (TRANSFER_OUT)
+- To branch gains stock on receipt (TRANSFER_IN)
+
+================================================================================
+PROFIT CALCULATION ARCHITECTURE
+================================================================================
+
+PROFIT CALCULATION FORMULA:
+Profit = Total Revenue - Total Cost of Goods Sold
+
+REVENUE CALCULATION:
+Revenue = (Quantity * Unit Price) - Line Discount + Line Tax
+
+COGS CALCULATION:
+For each sale item:
+  COGS = Quantity * Cost Price (from batch at time of sale)
+
+COST PRESERVATION:
+- Store cost_price in sale_items at time of sale
+- Cost price = batch.purchase_price (historical)
+- Enables accurate profit even if batch price changes later
+
+PROFIT CALCULATION EXAMPLE:
+Item 1:
+  Quantity: 10 units
+  Unit Price: 50 (Retail)
+  Cost Price: 30 (Batch purchase price)
+  Line Discount: 5
+  Line Tax: 7.5
+  Revenue: (10 * 50) - 5 + 7.5 = 502.5
+  COGS: 10 * 30 = 300
+  Profit: 502.5 - 300 = 202.5
+
+PROFIT ADJUSTMENTS:
+- Sale Return: Reverse profit
+- Purchase Return: Adjust COGS
+- Discount: Reduce revenue
+- Tax: Increase revenue
+
+================================================================================
+AUDIT LOG ARCHITECTURE
+================================================================================
+
+IMMUTABLE AUDIT TRAIL:
+Every important action is logged:
+- Login/Logout
+- Medicine creation/update
+- Purchase completion
+- Sale completion
+- Sale return
+- Purchase return
+- Stock adjustment
+- Stock transfer
+- User creation
+- Permission changes
+- Settings changes
+
+AUDIT LOG FIELDS:
+- organization_id: Which organization
+- branch_id: Which branch (if applicable)
+- user_id: Who performed action
+- action: What action (create_medicine, complete_sale, etc.)
+- entity_type: What entity (medicine, sale, purchase, etc.)
+- entity_id: ID of entity affected
+- old_values: Previous values (JSONB)
+- new_values: New values (JSONB)
+- ip_address: Source IP
+- user_agent: Browser/client info
+- status: success or error
+- error_message: If failed
+- created_at: When it happened
+
+AUDIT USES:
+- Regulatory compliance
+- Fraud detection
+- Troubleshooting
+- Historical analysis
+- Data recovery
+
+================================================================================
+API ARCHITECTURE
+================================================================================
+
+REST API ENDPOINTS (Grouped by Domain):
+
+AUTHENTICATION:
+POST /auth/login - Login
+POST /auth/logout - Logout
+POST /auth/refresh - Refresh token
+GET /auth/me - Current user
+POST /auth/change-password - Change password
+
+ORGANIZATIONS:
+GET /organizations - List (SUPER_ADMIN only)
+GET /organizations/:id - Get details
+PUT /organizations/:id - Update
+POST /organizations - Create (SUPER_ADMIN only)
+
+BRANCHES:
+GET /organizations/:orgId/branches - List
+POST /organizations/:orgId/branches - Create
+PUT /organizations/:orgId/branches/:id - Update
+GET /organizations/:orgId/branches/:id - Get details
+
+USERS:
+GET /organizations/:orgId/users - List
+POST /organizations/:orgId/users - Create
+PUT /organizations/:orgId/users/:id - Update
+DELETE /organizations/:orgId/users/:id - Delete
+POST /organizations/:orgId/users/:id/roles - Assign role
+POST /organizations/:orgId/users/:id/branch-access - Grant branch access
+
+MEDICINES:
+GET /organizations/:orgId/medicines - List
+POST /organizations/:orgId/medicines - Create
+PUT /organizations/:orgId/medicines/:id - Update
+GET /organizations/:orgId/medicines/:id - Get details
+GET /organizations/:orgId/medicines/search - Search by name/SKU/barcode
+
+BATCHES:
+GET /organizations/:orgId/batches - List
+POST /organizations/:orgId/medicines/:medicineId/batches - Create
+GET /organizations/:orgId/batches/:id - Get details
+
+INVENTORY:
+GET /organizations/:orgId/branches/:branchId/inventory - List
+POST /organizations/:orgId/branches/:branchId/inventory/adjustment - Adjust stock
+GET /organizations/:orgId/inventory/expiring - Get expiring soon
+GET /organizations/:orgId/inventory/low-stock - Get low stock alerts
+
+PURCHASES:
+GET /organizations/:orgId/branches/:branchId/purchases - List
+POST /organizations/:orgId/branches/:branchId/purchases - Create
+PUT /organizations/:orgId/purchases/:id - Update
+POST /organizations/:orgId/purchases/:id/complete - Complete purchase
+POST /organizations/:orgId/purchases/:id/cancel - Cancel purchase
+GET /organizations/:orgId/purchases/:id - Get details
+
+SALES:
+GET /organizations/:orgId/branches/:branchId/sales - List
+POST /organizations/:orgId/branches/:branchId/sales - Create
+PUT /organizations/:orgId/sales/:id - Update
+POST /organizations/:orgId/sales/:id/complete - Complete sale
+POST /organizations/:orgId/sales/:id/cancel - Cancel sale
+GET /organizations/:orgId/sales/:id - Get details
+
+RETURNS:
+POST /organizations/:orgId/branches/:branchId/sale-returns - Create sale return
+POST /organizations/:orgId/branches/:branchId/purchase-returns - Create purchase return
+
+STOCK TRANSFERS:
+GET /organizations/:orgId/stock-transfers - List
+POST /organizations/:orgId/stock-transfers - Request transfer
+POST /organizations/:orgId/stock-transfers/:id/approve - Approve
+POST /organizations/:orgId/stock-transfers/:id/dispatch - Dispatch
+POST /organizations/:orgId/stock-transfers/:id/receive - Receive
+
+REPORTS:
+GET /organizations/:orgId/reports/sales - Sales report
+GET /organizations/:orgId/reports/profit-loss - Profit/Loss report
+GET /organizations/:orgId/reports/inventory - Inventory report
+GET /organizations/:orgId/reports/supplier-ledger - Supplier ledger
+GET /organizations/:orgId/reports/customer-ledger - Customer ledger
+
+AUDIT LOGS:
+GET /organizations/:orgId/audit-logs - List audit logs
+
+================================================================================
+FRONTEND ARCHITECTURE
+================================================================================
+
+LAYOUT:
+- Sidebar (Navigation)
+- Header (User menu, notifications, search)
+- Main content area
+- Footer (optional)
+
+PAGES:
+/login - Login page
+/dashboard - Main dashboard
+/pos - POS interface (sales)
+/sales - Sales list and management
+/purchases - Purchases list and management
+/inventory - Inventory management
+/medicines - Medicine master
+/batches - Batch management
+/suppliers - Supplier management
+/customers - Customer management
+/expenses - Expense tracking
+/transfers - Stock transfers
+/reports - Reports and analytics
+/branches - Branch management
+/users - User management
+/settings - Organization settings
+
+COMPONENTS:
+- Header (Navigation, User menu)
+- Sidebar (Menu, Branch selector)
+- Table (Data display with pagination)
+- Form (Create/Edit medicines, sales, etc.)
+- Modal (Confirmations, details)
+- Card (Summary statistics)
+- Chart (Sales trends, profit, etc.)
+
+POS INTERFACE:
+- Medicine search (barcode, name, SKU)
+- Cart display (items, quantities, prices)
+- Discount/Tax calculator
+- Payment methods (Cash, Card, Mobile)
+- Invoice preview
+- Print receipt
+
+REPORTS:
+- Sales Report (date range, branch filter)
+- Profit/Loss Report (date range, branch filter)
+- Inventory Report (current stock, expiry)
+- Supplier Ledger (outstanding balance)
+- Customer Ledger (outstanding balance)
+- Expiry Report (expiring soon, expired)
+
+================================================================================
+PROJECT FOLDER STRUCTURE
+================================================================================
+
+frontend/
+├── src/
+│   ├── components/
+│   │   ├── common/
+│   │   │   ├── Header.tsx
+│   │   │   ├── Sidebar.tsx
+│   │   │   ├── Layout.tsx
+│   │   │   └── LoadingSpinner.tsx
+│   │   ├── forms/
+│   │   │   ├── MedicineForm.tsx
+│   │   │   ├── PurchaseForm.tsx
+│   │   │   ├── SaleForm.tsx
+│   │   │   └── UserForm.tsx
+│   │   ├── tables/
+│   │   │   ├── MedicinesTable.tsx
+│   │   │   ├── SalesTable.tsx
+│   │   │   ├── InventoryTable.tsx
+│   │   │   └── BatchesTable.tsx
+│   │   ├── modals/
+│   │   │   ├── ConfirmModal.tsx
+│   │   │   ├── DetailsModal.tsx
+│   │   │   └── PaymentModal.tsx
+│   │   └── charts/
+│   │       ├── SalesChart.tsx
+│   │       ├── ProfitChart.tsx
+│   │       └── InventoryChart.tsx
+│   ├── pages/
+│   │   ├── Login.tsx
+│   │   ├── Dashboard.tsx
+│   │   ├── POS.tsx
+│   │   ├── Sales/
+│   │   │   ├── List.tsx
+│   │   │   ├── Create.tsx
+│   │   │   └── Details.tsx
+│   │   ├── Purchases/
+│   │   │   ├── List.tsx
+│   │   │   ├── Create.tsx
+│   │   │   └── Details.tsx
+│   │   ├── Inventory/
+│   │   │   ├── List.tsx
+│   │   │   ├── Adjustment.tsx
+│   │   │   └── Transfers.tsx
+│   │   ├── Medicines/
+│   │   │   ├── List.tsx
+│   │   │   ├── Create.tsx
+│   │   │   └── Edit.tsx
+│   │   ├── Reports/
+│   │   │   ├── Sales.tsx
+│   │   │   ├── ProfitLoss.tsx
+│   │   │   ├── Inventory.tsx
+│   │   │   └── Ledgers.tsx
+│   │   ├── Admin/
+│   │   │   ├── Users.tsx
+│   │   │   ├── Branches.tsx
+│   │   │   ├── Roles.tsx
+│   │   │   └── Settings.tsx
+│   │   └── NotFound.tsx
+│   ├── hooks/
+│   │   ├── useAuth.ts
+│   │   ├── useFetch.ts
+│   │   ├── useForm.ts
+│   │   ├── useOrganization.ts
+│   │   └── useBranch.ts
+│   ├── services/
+│   │   ├── api.ts (Axios instance)
+│   │   ├── auth.ts
+│   │   ├── medicines.ts
+│   │   ├── sales.ts
+│   │   ├── purchases.ts
+│   │   ├── inventory.ts
+│   │   ├── reports.ts
+│   │   └── users.ts
+│   ├── types/
+│   │   ├── api.ts (API response types)
+│   │   ├── domain.ts (Business entities)
+│   │   └── ui.ts (UI component props)
+│   ├── utils/
+│   │   ├── auth.ts (JWT handling)
+│   │   ├── format.ts (Date, currency formatting)
+│   │   ├── validation.ts (Input validation)
+│   │   └── constants.ts (App constants)
+│   ├── styles/
+│   │   ├── globals.css
+│   │   ├── variables.css
+│   │   └── components.css
+│   ├── App.tsx
+│   ├── main.tsx
+│   └── index.css
+├── public/
+│   └── favicon.ico
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+└── tailwind.config.ts
+
+backend/
+├── src/
+│   ├── controllers/
+│   │   ├── auth.controller.ts
+│   │   ├── medicines.controller.ts
+│   │   ├── sales.controller.ts
+│   │   ├── purchases.controller.ts
+│   │   ├── inventory.controller.ts
+│   │   ├── users.controller.ts
+│   │   ├── reports.controller.ts
+│   │   └── branches.controller.ts
+│   ├── services/
+│   │   ├── auth.service.ts
+│   │   ├── medicines.service.ts
+│   │   ├── sales.service.ts (Complex business logic)
+│   │   ├── purchases.service.ts (Complex business logic)
+│   │   ├── inventory.service.ts
+│   │   ├── fefo.service.ts (FEFO algorithm)
+│   │   ├── profit.service.ts (Profit calculation)
+│   │   ├── users.service.ts
+│   │   └── reports.service.ts
+│   ├── repositories/
+│   │   ├── medicines.repository.ts
+│   │   ├── sales.repository.ts
+│   │   ├── purchases.repository.ts
+│   │   ├── inventory.repository.ts
+│   │   ├── users.repository.ts
+│   │   ├── batches.repository.ts
+│   │   └── audit-logs.repository.ts
+│   ├── middleware/
+│   │   ├── auth.middleware.ts (JWT verification)
+│   │   ├── tenant.middleware.ts (Tenant isolation)
+│   │   ├── rbac.middleware.ts (Permission checking)
+│   │   ├── audit.middleware.ts (Audit logging)
+│   │   ├── error.middleware.ts (Error handling)
+│   │   └── validation.middleware.ts (Input validation)
+│   ├── validators/
+│   │   ├── medicine.validator.ts
+│   │   ├── sale.validator.ts
+│   │   ├── purchase.validator.ts
+│   │   ├── user.validator.ts
+│   │   └── common.validator.ts
+│   ├── routes/
+│   │   ├── auth.routes.ts
+│   │   ├── medicines.routes.ts
+│   │   ├── sales.routes.ts
+│   │   ├── purchases.routes.ts
+│   │   ├── inventory.routes.ts
+│   │   ├── users.routes.ts
+│   │   ├── reports.routes.ts
+│   │   ├── branches.routes.ts
+│   │   └── index.ts
+│   ├── types/
+│   │   ├── express.d.ts (Extended Request)
+│   │   ├── domain.ts (Business entities)
+│   │   ├── api.ts (API request/response)
+│   │   └── database.ts (DB types)
+│   ├── utils/
+│   │   ├── jwt.ts (JWT utilities)
+│   │   ├── hash.ts (Password hashing)
+│   │   ├── logger.ts (Logging)
+│   │   ├── errors.ts (Custom errors)
+│   │   ├── validators.ts (Validation helpers)
+│   │   └── constants.ts (App constants)
+│   ├── database/
+│   │   ├── connection.ts (DB connection)
+│   │   ├── transaction.ts (Transaction helpers)
+│   │   └── seed.ts (Seed data)
+│   ├── config/
+│   │   ├── env.ts (Environment variables)
+│   │   ├── database.ts (DB config)
+│   │   └── app.ts (App config)
+│   ├── app.ts (Express app setup)
+│   └── server.ts (Entry point)
+├── database/
+│   ├── migrations/
+│   │   ├── 001_initial_schema.sql
+│   │   ├── 002_rls_policies.sql
+│   │   ├── 003_indexes.sql
+│   │   └── ...
+│   ├── seeds/
+│   │   ├── roles.seed.ts
+│   │   ├── permissions.seed.ts
+│   │   └── sample-data.seed.ts
+│   └── schema.prisma (Prisma schema)
+├── tests/
+│   ├── unit/
+│   │   ├── services/
+│   │   │   ├── fefo.service.test.ts
+│   │   │   ├── profit.service.test.ts
+│   │   │   ├── sales.service.test.ts
+│   │   │   └── inventory.service.test.ts
+│   │   └── validators/
+│   │       └── sale.validator.test.ts
+│   ├── integration/
+│   │   ├── sales.integration.test.ts
+│   │   ├── purchases.integration.test.ts
+│   │   ├── stock-transfer.integration.test.ts
+│   │   └── rbac.integration.test.ts
+│   └── setup.ts
+├── package.json
+├── tsconfig.json
+├── jest.config.js
+└── .env.example
+
+================================================================================
+SECURITY ARCHITECTURE
+================================================================================
+
+PROTECTION AGAINST:
+
+1. SQL INJECTION:
+   - Use parameterized queries (pg library)
+   - Input validation with Zod
+   - Never concatenate user input into SQL
+
+2. XSS (Cross-Site Scripting):
+   - React escapes JSX by default
+   - Sanitize user input before rendering
+   - Use Content Security Policy (CSP) headers
+
+3. CSRF (Cross-Site Request Forgery):
+   - Use SameSite cookie flag
+   - Verify Origin header
+   - Use CSRF tokens for state-changing requests
+
+4. UNAUTHORIZED API ACCESS:
+   - Require JWT token for all protected endpoints
+   - Verify token expiry and signature
+   - Implement refresh token rotation
+
+5. TENANT DATA LEAKAGE:
+   - RLS policies at database level
+   - Middleware enforces organization_id
+   - Query filtering adds secondary layer
+   - Audit logs track cross-org access attempts
+
+6. PRIVILEGE ESCALATION:
+   - RBAC enforced at API layer
+   - Never trust frontend permissions
+   - Verify user roles in backend
+   - Audit all permission changes
+
+7. BRUTE FORCE LOGIN:
+   - Rate limit login attempts
+   - Lock account after N failed attempts
+   - Implement CAPTCHA after failures
+
+8. INSECURE FILE UPLOADS:
+   - Validate file type (whitelist)
+   - Check file size limits
+   - Scan for malware
+   - Store in secure location
+
+9. FINANCIAL RECORD MANIPULATION:
+   - All transactions atomic (all succeed or all fail)
+   - Immutable audit logs
+   - Digital signatures for important records
+   - Regular reconciliation
+
+================================================================================
+TRANSACTION/CONCURRENCY STRATEGY
+================================================================================
+
+CRITICAL TRANSACTIONS (Must be atomic):
+
+1. COMPLETE PURCHASE:
+   - Create/update batch
+   - Create/update inventory
+   - Create inventory movement
+   - Update purchase status
+   - Update supplier balance
+   All succeed or all fail
+
+2. COMPLETE SALE:
+   - Validate stock (FEFO)
+   - Allocate batches
+   - Create sale record
+   - Create sale items
+   - Decrease inventory
+   - Create inventory movements
+   - Calculate profit
+   - Record payment
+   All succeed or all fail
+
+3. SALE RETURN:
+   - Create sale_return record
+   - Restore inventory
+   - Create reverse movements
+   - Reverse profit
+   All succeed or all fail
+
+4. PURCHASE RETURN:
+   - Create purchase_return record
+   - Decrease inventory
+   - Create reverse movements
+   - Reduce supplier balance{
