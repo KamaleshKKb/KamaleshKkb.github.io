@@ -42,7 +42,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './dist' # Vite সাধারণত dist ফোল্ডারে বিল্ড ফাইল তৈরি করে
+          path: './dist'
 
       - name: Deploy to GitHub Pages
         id: deployment
