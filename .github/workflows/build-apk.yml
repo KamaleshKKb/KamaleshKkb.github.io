@@ -39,8 +39,9 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # এই লাইনটিই মূল সমাধান (v3 থেকে v4)
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Build Debug APK
         run: cd android && chmod +x gradlew && ./gradlew assembleDebug
