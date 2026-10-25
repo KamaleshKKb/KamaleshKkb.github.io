@@ -1,4 +1,4 @@
-ame: Build Android APK
+name: Build Android APK
 
 on:
   push:
@@ -9,43 +9,43 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-· name: Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-· name: Setup Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: 'npm'
 
-· name: Install dependencies
+      - name: Install dependencies
         run: npm install
 
-· name: Install Capacitor
+      - name: Install Capacitor
         run: npm install @capacitor/core @capacitor/cli @capacitor/android
 
-· name: Build web assets
+      - name: Build web assets
         run: npm run build
 
-· name: Add Android Platform
+      - name: Add Android Platform
         run: npx cap add android
 
-· name: Sync Capacitor
+      - name: Sync Capacitor
         run: npx cap sync android
 
-· name: Setup Java
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
 
-· name: Setup Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-· name: Build Debug APK
+      - name: Build Debug APK
         run: cd android && chmod +x gradlew && ./gradlew assembleDebug
 
-· name: Upload APK Artifact
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Pharmacy-App-Debug
